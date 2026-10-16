@@ -1,13 +1,3 @@
-"""Project 2：单文件 A* 栅格路径规划（Python 3.10+）。
-
-安装绘图依赖：python -m pip install matplotlib
-运行示例：python astar.py
-默认在终端展示四、八邻域；缺少绘图库时跳过图片，保留搜索结果。
-只输出文本结果、不生成图片：python astar.py --no-plot
-自定义输入：python astar.py --input map.json --movement 8 --heuristic octile
-坐标采用 (行, 列)，0 表示空地，1 表示障碍物。
-"""
-
 import argparse
 from dataclasses import dataclass
 import heapq
@@ -37,7 +27,7 @@ class SearchResult:
 
 
 def validate(grid, start, goal):
-    """校验普通列表／元组及内置 int；不接受 bool 或 NumPy 整数。"""
+    """先校验输入，避免越界、非矩形地图或在障碍物上搜索。"""
     if not isinstance(grid, (list, tuple)) or not grid:
         raise ValueError('地图必须是非空二维数组。')
     if not isinstance(grid[0], (list, tuple)) or not grid[0]:
@@ -161,15 +151,14 @@ def draw_results(grid, start, goal, selected, movement, heuristic, tie_break, ou
     plt.rcParams['axes.unicode_minus'] = False
     other_movement = 8 if movement == 4 else 4
     other_h = 'octile' if other_movement == 8 else 'manhattan'
-    # 两幅路径图使用相同的同优先级策略，另一邻域采用其默认启发式。
-    other = astar(grid, start, goal, other_movement, other_h, tie_break)
+    other = astar(grid, start, goal, other_movement, other_h, 'low_h')
     rows, cols = len(grid), len(grid[0])
     fig = plt.figure(figsize=(13, 10), facecolor='white')
     layout = fig.add_gridspec(2, 2, height_ratios=[1.3, 1], hspace=0.22, wspace=0.12)
     fig.suptitle('A* 栅格路径规划｜实际运行结果', fontsize=20, fontweight='bold', y=0.975)
     colors = ListedColormap(['#F1F5F9', '#263445', '#D6E8FB'])
     for index, (result, moves, hname, tie) in enumerate([
-            (selected, movement, heuristic, tie_break), (other, other_movement, other_h, tie_break)]):
+            (selected, movement, heuristic, tie_break), (other, other_movement, other_h, 'low_h')]):
         ax = fig.add_subplot(layout[0, index])
         cells = [row[:] for row in grid]
         for r, c in result.expanded:
@@ -240,26 +229,13 @@ def main():
     parser = argparse.ArgumentParser(description='A* 最短路径搜索；坐标为 (行, 列)。')
     parser.add_argument('--input', type=Path, help='JSON 文件，包含 grid、start、goal')
     parser.add_argument('--movement', type=int, choices=(4, 8), default=None,
-                        help='指定 4 或 8；未指定邻域和启发式时展示两种邻域；仅指定启发式时默认 4')
-    parser.add_argument('--heuristic', choices=sorted(set(sum(HEURISTICS.values(), ()))), default=None,
-                        help='启发式函数；octile 需配合 --movement 8，manhattan 仅用于 4 邻域')
+                        help='指定 4 或 8；未指定邻域和启发式时展示两种邻域')
+    parser.add_argument('--heuristic', choices=sorted(set(sum(HEURISTICS.values(), ()))), default=None)
     parser.add_argument('--tie', choices=('low_h', 'fifo'), default='low_h')
-    parser.add_argument('--no-plot', action='store_true', help='只输出文本结果，不加载绘图库、不生成图片')
+    parser.add_argument('--no-plot', action='store_true', help='只输出结果，不加载绘图库')
     parser.add_argument('--output', type=Path, default=Path(__file__).with_name('运行结果.png'))
     args = parser.parse_args()
     try:
-        # 在读取、显示地图和执行搜索前，先检查参数组合及图片输出路径。
-        movements = (4, 8) if args.movement is None and args.heuristic is None else (args.movement or 4,)
-        if args.heuristic is not None and args.heuristic not in HEURISTICS[movements[0]]:
-            if args.heuristic == 'octile':
-                raise ValueError('octile 仅用于八邻域，请同时指定 --movement 8。')
-            raise ValueError(f'启发式 {args.heuristic} 不支持 {movements[0]} 邻域；'
-                             f'可选：{", ".join(HEURISTICS[movements[0]])}。')
-        if not args.no_plot:
-            if not args.output.parent.is_dir():
-                raise ValueError('图片输出目录不存在，请先创建目录。')
-            if args.output.is_dir():
-                raise ValueError('图片输出路径是目录，请指定图片文件名，例如 result.png。')
         if args.input:
             content = json.loads(args.input.read_text(encoding='utf-8-sig'))
             if not isinstance(content, dict) or not all(k in content for k in ('grid', 'start', 'goal')):
@@ -267,10 +243,9 @@ def main():
             grid, start, goal = content['grid'], content['start'], content['goal']
         else:
             grid, start, goal = demo_map()
-        # 必须先校验，才能安全读取尺寸和转换坐标；astar 也独立校验其调用参数。
-        validate(grid, start, goal)
         print(f'地图：{len(grid)}×{len(grid[0])}；起点：{tuple(start)}；终点：{tuple(goal)}')
         # 默认展示两个模型；显式指定参数时仅搜索所选模型。
+        movements = (4, 8) if args.movement is None and args.heuristic is None else (args.movement or 4,)
         selected = None
         for movement in movements:
             hname = args.heuristic if args.heuristic is not None else ('manhattan' if movement == 4 else 'octile')
@@ -283,6 +258,8 @@ def main():
             print(f'路径步数：{max(len(result.path)-1, 0)}；总代价：{result.cost}')
             print(f'扩展节点数：{len(result.expanded)}；搜索耗时：{result.elapsed_ms:.3f} ms')
         if not args.no_plot:
+            if not args.output.parent.is_dir():
+                raise ValueError('图片输出目录不存在，请先创建目录。')
             result, movement, hname = selected
             try:
                 draw_results(grid, tuple(start), tuple(goal), result, movement, hname, args.tie, args.output)
